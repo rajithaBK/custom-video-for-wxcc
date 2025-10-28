@@ -137,6 +137,14 @@ async function bindButtonEvents(meeting) {
   if (self) {
     enableDrag(self, remoteView);
   }
+
+  // Handle orientation changes
+  window.addEventListener('resize', handleOrientationChange);
+  if (screen.orientation) {
+    screen.orientation.addEventListener('change', handleOrientationChange);
+  }
+  // Set initial orientation
+  handleOrientationChange();
 }
 async function bindMeetingEvents(meeting) {
   const selfView = document.getElementById("self-view");
@@ -204,5 +212,16 @@ async function joinMeeting(meeting) {
   } catch (error) {
     console.log(error, "Join Meeting Error");
     throw error;
+  }
+}
+function handleOrientationChange() {
+  const self = document.getElementById('self');
+  const isLandscape = window.innerWidth > window.innerHeight;
+  if (isLandscape) {
+    self.style.width = '40%';
+    self.style.height = 'auto';
+  } else {
+    self.style.width = '25%';
+    self.style.height = 'auto';
   }
 }
