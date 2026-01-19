@@ -20694,7 +20694,7 @@ eval("const axios = __webpack_require__(/*! axios */ \"./node_modules/axios/dist
   \***************************************************/
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
-eval("const axios = __webpack_require__(/*! axios */ \"./node_modules/axios/dist/browser/axios.cjs\");\n(__webpack_require__(/*! dotenv */ \"./node_modules/dotenv/lib/main.js\").config)();\nasync function getDestLinks(access_token) {\n  const destination = \"vvazquez@cisco.webex.com\";\n  return destination; // const currentDateTime = new Date().toISOString();\n}\nmodule.exports = getDestLinks;\n\n//# sourceURL=webpack://webex-meetings/./src/utils/get-dest-links-whiteboarding.js?");
+eval("const axios = __webpack_require__(/*! axios */ \"./node_modules/axios/dist/browser/axios.cjs\");\n(__webpack_require__(/*! dotenv */ \"./node_modules/dotenv/lib/main.js\").config)();\nasync function getDestLinks(access_token) {\n  const destination = \"vvazquez@wxsd.webex.com\";\n  return destination; // const currentDateTime = new Date().toISOString();\n}\nmodule.exports = getDestLinks;\n\n//# sourceURL=webpack://webex-meetings/./src/utils/get-dest-links-whiteboarding.js?");
 
 /***/ }),
 
