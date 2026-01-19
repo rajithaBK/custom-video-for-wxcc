@@ -17,8 +17,6 @@ const urlParams = new URLSearchParams(window.location.search);
 const name = urlParams.get("name") !== null ? urlParams.get("name") : "John Doe";
 const email = urlParams.get("email") !== null ? urlParams.get("email") : "johndoe@gmail.com";
 const SAAccessToken = await getAccessToken();
-// const myAccessToken =
-//   "MDFmZWRhMTItYmQ0OS00MDM4LTg1ZmQtNWU2OTEzMDU1MGQ4NmI3OTMzMDgtMDQ0_P0A1_952e87f4-5c49-4ca1-b285-ee0570c2498c";
 console.log("got access token", SAAccessToken);
 const myAccessToken = await getGuestToken(name, SAAccessToken);
 console.log("got guest token", myAccessToken);
