@@ -1,7 +1,8 @@
 import "./style.css";
 import getAccessToken from "./utils/get-access-token.js";
 import getGuestToken from "./utils/get-guest-token.js";
-import getDestLinks from "./utils/get-dest-links.js";
+// import getDestLinks from "./utils/get-dest-links.js";
+import getDestLinks from "./utils/get-dest-links-whiteboarding.js";
 require("dotenv").config();
 const {
   enableDrag
