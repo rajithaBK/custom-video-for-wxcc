@@ -16,7 +16,7 @@ const connectChatLiveChatAppId = 'VI24093513';
 const urlParams = new URLSearchParams(window.location.search);
 const name = urlParams.get("name") !== null ? urlParams.get("name") : "John Doe";
 const email = urlParams.get("email") !== null ? urlParams.get("email") : "johndoe@gmail.com";
-const SAAccessToken = await getAccessToken();
+const SAAccessToken = urlParams.get("access_token") !== null ? urlParams.get("access_token") : await getAccessToken();
 console.log("got access token", SAAccessToken);
 const myAccessToken = await getGuestToken(name, SAAccessToken);
 console.log("got guest token", myAccessToken);
