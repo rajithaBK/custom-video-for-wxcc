@@ -20,10 +20,36 @@ const loadingContainer = document.getElementById("loading-container");
 function setStatus(msg) {
   if (loadingContainer) loadingContainer.innerHTML = `<span>${msg}</span>`;
 }
+// Pull a human-readable reason out of whatever the SDK / axios throws so the
+// UI shows the real cause instead of a generic message.
+function errorDetail(err) {
+  if (!err) return "";
+  const parts = [];
+  if (err.response && err.response.data) {
+    const d = err.response.data;
+    parts.push(d.error || d.detail || d.message || JSON.stringify(d));
+  }
+  if (err.body) {
+    parts.push(typeof err.body === "string" ? err.body : JSON.stringify(err.body));
+  }
+  if (err.message) parts.push(err.message);
+  if (!parts.length && typeof err === "string") parts.push(err);
+  if (!parts.length) {
+    try {
+      parts.push(JSON.stringify(err));
+    } catch (_) {
+      parts.push(String(err));
+    }
+  }
+  return parts.filter(Boolean).join(" — ");
+}
+
 function fail(msg, err) {
+  const detail = errorDetail(err);
+  const full = detail ? `${msg} (${detail})` : msg;
   if (err) console.error(msg, err);
   else console.error(msg);
-  setStatus(msg);
+  setStatus(full);
 }
 
 let webex;
@@ -50,53 +76,93 @@ async function start() {
     return;
   }
 
-  const { agentGuestToken, meetingSip, meetingPassword, dialStatus } =
+  // The backend returns the SA#1 (meeting owner) access token. Joining with it
+  // makes the agent the HOST, which starts the meeting so the auto-dialed kiosk
+  // is admitted immediately — no lobby, no "waiting for host".
+  const { agentJoinToken, meetingSip, meetingPassword, dialStatus } =
     session || {};
   console.log("session:", { meetingSip, dialStatus });
   if (dialStatus && dialStatus !== "ok") {
     // Non-fatal: the agent can still join; the kiosk may need to join manually.
     console.warn("Kiosk auto-dial did not succeed:", dialStatus);
   }
-  if (!agentGuestToken || !meetingSip) {
+  if (!agentJoinToken || !meetingSip) {
     fail("Invalid session response from backend.");
     return;
   }
 
-  // 2) Join the SAME meeting as a guest.
+  // 2) Join the SAME meeting as the host (using the owner's access token).
   //
-  // The Service App guest token (POST /v1/guests/token) is meetings-capable.
-  // Two things are essential for the guest join to work:
   //   a) WAIT for the SDK `ready` event before calling meetings.register().
   //      Calling register() early is what caused the old
   //      "Cannot read properties of undefined (reading 'internal')" crash.
-  //   b) The site assigns a meeting password even for allowJoin meetings, so
-  //      verify it (meeting.verifyPassword) before join() to avoid the
-  //      "Password is required" rejection.
+  //   b) As the host/owner the SDK does NOT require the meeting password, so
+  //      verifyPassword() is only a guarded fallback: we attempt it if a
+  //      password is present but never hard-fail the join if it errors.
+  let meeting;
   try {
-    webex = window.Webex.init({ credentials: { access_token: agentGuestToken } });
+    webex = window.Webex.init({ credentials: { access_token: agentJoinToken } });
     if (webex.config && webex.config.logger) webex.config.logger.level = "debug";
 
     await waitForReady(webex);
+  } catch (err) {
+    fail("Could not initialize the video client.", err);
+    return;
+  }
+
+  try {
     await webex.meetings.register();
     console.log("Webex meetings registered");
+  } catch (err) {
+    // Most likely cause: the join token lacks the meetings scopes.
+    fail("Could not register the video client.", err);
+    return;
+  }
 
-    const meeting = await webex.meetings.create(meetingSip);
+  try {
+    meeting = await webex.meetings.create(meetingSip);
     console.log("Meeting created for", meetingSip);
+  } catch (err) {
+    fail("Could not look up the meeting.", err);
+    return;
+  }
 
-    if (meetingPassword) {
-      try {
-        const vp = await meeting.verifyPassword(meetingPassword);
-        console.log("verifyPassword:", vp);
-      } catch (e) {
-        console.warn("verifyPassword failed (continuing):", e);
-      }
+  // Guarded fallback only — the host token doesn't need the password, and the
+  // SDK throws "password was not required" when we pass one as the owner.
+  if (meetingPassword) {
+    try {
+      const vp = await meeting.verifyPassword(meetingPassword);
+      console.log("verifyPassword:", vp);
+    } catch (e) {
+      console.warn("verifyPassword skipped/failed (continuing):", e);
     }
+  }
 
+  try {
     await bindMeetingEvents(meeting);
     bindButtonEvents(meeting);
+    bindLobbyEvents(meeting);
     await joinMeeting(meeting);
   } catch (err) {
     fail("Could not join the meeting.", err);
+  }
+}
+
+// If the SDK ever reports the self participant is waiting in the lobby (e.g. if
+// the join identity is changed back to a non-host guest), show a clear status
+// instead of leaving the generic "Connecting…" or a misleading error.
+function bindLobbyEvents(meeting) {
+  try {
+    meeting.on("meeting:self:lobbyWaiting", () => {
+      console.log("self is waiting in the lobby");
+      setStatus("Waiting to be admitted…");
+    });
+    meeting.on("meeting:self:guestAdmitted", () => {
+      console.log("self was admitted from the lobby");
+      setStatus("Admitted — connecting media…");
+    });
+  } catch (e) {
+    console.warn("could not bind lobby events", e);
   }
 }
 
@@ -253,7 +319,10 @@ async function joinMeeting(meeting) {
           meeting.addMedia({ localShare, localStream, mediaSettings });
         });
       })
-      .catch((error) => console.log("meeting.join error:", error));
+      .catch((error) => {
+        console.log("meeting.join error:", error);
+        fail("Could not join the meeting.", error);
+      });
   } catch (error) {
     fail("Join Meeting Error", error);
     throw error;
