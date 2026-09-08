@@ -386,11 +386,8 @@ async function joinMeeting(meeting) {
 }
 
 function handleOrientationChange() {
-  const self = document.getElementById("self");
-  if (!self) return;
-  const isLandscape = window.innerWidth > window.innerHeight;
-  self.style.width = isLandscape ? "40%" : "25%";
-  self.style.height = "auto";
+  // Self-view sizing/position is handled by style.css now. This is kept so the
+  // resize/orientation listeners bound in bindButtonEvents remain valid no-ops.
 }
 
 // Minimal draggable self-view (replaces the bundled ./selfview helper).
