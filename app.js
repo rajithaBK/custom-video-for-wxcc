@@ -53,6 +53,7 @@ function fail(msg, err) {
 }
 
 let webex;
+let currentMeeting = null;
 
 async function start() {
   if (!agentToken || String(agentToken).indexOf("$STORE") !== -1) {
@@ -121,6 +122,7 @@ async function start() {
 
   try {
     meeting = await webex.meetings.create(meetingSip);
+    currentMeeting = meeting;
     console.log("Meeting created for", meetingSip);
   } catch (err) {
     fail("Could not look up the meeting.", err);
@@ -256,76 +258,130 @@ async function bindMeetingEvents(meeting) {
 
   meeting.on("error", (error) => console.log(error, "Meeting Error"));
 
+  // In webex 3.x, 'media:ready' delivers the REMOTE streams (remoteVideo /
+  // remoteAudio / remoteShare). The LOCAL self-view is attached separately in
+  // joinMeeting() from the created camera stream's `.outputStream`.
   meeting.on("media:ready", (media) => {
-    if (!media) return;
+    if (!media || !media.stream) return;
     const element =
-      media.type === "local"
-        ? selfView
-        : media.type === "remoteVideo"
+      media.type === "remoteVideo"
         ? remoteViewVideo
         : media.type === "remoteAudio"
         ? remoteViewAudio
+        : media.type === "local"
+        ? selfView
         : null;
     if (element) {
       element.srcObject = media.stream;
-      buttonsContainer.style.display = "flex";
+      if (buttonsContainer) buttonsContainer.style.display = "flex";
       if (loadingContainer) loadingContainer.style.display = "none";
     }
   });
 
   meeting.on("media:stopped", (media) => {
-    console.log("meeting stopped");
-    try {
-      meeting.stopRecording();
-    } catch (e) {}
-    try {
-      webex.meetings.unregister();
-    } catch (e) {}
-    window.location.href = "hangup.html";
+    if (!media) return;
     const element =
-      media.type === "local"
-        ? selfView
-        : media.type === "remoteVideo"
+      media.type === "remoteVideo"
         ? remoteViewVideo
         : media.type === "remoteAudio"
         ? remoteViewAudio
+        : media.type === "local"
+        ? selfView
         : null;
-    if (element) {
-      element.srcObject = null;
-      buttonsContainer.style.display = "none";
-    }
+    if (element) element.srcObject = null;
   });
+
+  // Full teardown when the local user leaves / the meeting ends.
+  meeting.on("meeting:self:left", cleanupAndRedirect);
+  meeting.on("meeting:ended", cleanupAndRedirect);
 }
 
-async function joinMeeting(meeting) {
+let __tornDown = false;
+function cleanupAndRedirect() {
+  if (__tornDown) return;
+  __tornDown = true;
+  console.log("meeting ended — cleaning up");
   try {
-    const { sendAudio, sendVideo } = await meeting.getSupportedDevices({
-      sendAudio: true,
-      sendVideo: true,
-    });
-    meeting
-      .join()
-      .then(async () => {
-        const mediaSettings = {
-          receiveVideo: true,
-          receiveAudio: true,
-          receiveShare: false,
-          sendShare: false,
-          sendVideo,
-          sendAudio,
-        };
-        meeting.getMediaStreams(mediaSettings).then((mediaStreams) => {
-          const [localStream, localShare] = mediaStreams;
-          meeting.addMedia({ localShare, localStream, mediaSettings });
-        });
-      })
-      .catch((error) => {
-        console.log("meeting.join error:", error);
-        fail("Could not join the meeting.", error);
-      });
+    const streams = currentMeeting && currentMeeting.__localStreams;
+    if (streams) {
+      if (streams.microphone && streams.microphone.stop) streams.microphone.stop();
+      if (streams.camera && streams.camera.stop) streams.camera.stop();
+    }
+  } catch (e) {}
+  try {
+    webex.meetings.unregister();
+  } catch (e) {}
+  window.location.href = "hangup.html";
+}
+
+// Webex JS SDK v3 (3.7.0) media flow.
+//
+// The old v2 API (getSupportedDevices / getMediaStreams /
+// addMedia({localStream, localShare})) does NOT exist in 3.x and throws
+// "meeting.getSupportedDevices is not a function". In 3.x you:
+//   1) create local streams via webex.meetings.mediaHelpers
+//      (createMicrophoneStream / createCameraStream),
+//   2) meeting.join({ enableMultistream: false })  (single-stream keeps the
+//      simple media:ready path for remote audio/video),
+//   3) meeting.addMedia({ localStreams: { microphone, camera },
+//                         audioEnabled, videoEnabled }).
+// Local video is shown from the created camera stream's `.outputStream`
+// (a MediaStream); remote media arrives via the 'media:ready' event.
+async function joinMeeting(meeting) {
+  const mediaHelpers = webex.meetings.mediaHelpers;
+
+  // Create local streams up front, but never hard-fail if a device is missing
+  // or permission is denied — audio-only, or even receive-only, should still
+  // connect instead of throwing.
+  let microphone = null;
+  let camera = null;
+  try {
+    microphone = await mediaHelpers.createMicrophoneStream();
+  } catch (e) {
+    console.warn("Microphone unavailable (continuing without mic):", e && e.name, e && e.message);
+  }
+  try {
+    camera = await mediaHelpers.createCameraStream();
+  } catch (e) {
+    console.warn("Camera unavailable (continuing without camera):", e && e.name, e && e.message);
+  }
+
+  // Keep references for cleanup on hangup.
+  meeting.__localStreams = { microphone, camera };
+
+  // Show the local camera immediately in the self-view.
+  if (camera && camera.outputStream) {
+    const selfView = document.getElementById("self-view");
+    if (selfView) selfView.srcObject = camera.outputStream;
+    const buttonsContainer = document.getElementById("buttons-container");
+    if (buttonsContainer) buttonsContainer.style.display = "flex";
+    if (loadingContainer) loadingContainer.style.display = "none";
+  }
+
+  // 1) Join (single-stream so remote media surfaces via media:ready).
+  try {
+    await meeting.join({ enableMultistream: false });
+    console.log("meeting joined");
   } catch (error) {
-    fail("Join Meeting Error", error);
+    fail("Could not join the meeting.", error);
     throw error;
+  }
+
+  // 2) Publish local media / negotiate remote media.
+  const localStreams = {};
+  if (microphone) localStreams.microphone = microphone;
+  if (camera) localStreams.camera = camera;
+  try {
+    await meeting.addMedia({
+      localStreams,
+      audioEnabled: !!microphone,
+      videoEnabled: !!camera,
+    });
+    console.log("media added");
+  } catch (error) {
+    // We're in the meeting; only media negotiation failed. Surface the real
+    // reason but don't treat it as a failure to join.
+    fail("Joined, but could not set up audio/video.", error);
   }
 }
 
