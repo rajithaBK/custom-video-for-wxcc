@@ -50,7 +50,8 @@ async function start() {
     return;
   }
 
-  const { agentGuestToken, meetingSip, dialStatus } = session || {};
+  const { agentGuestToken, meetingSip, meetingPassword, dialStatus } =
+    session || {};
   console.log("session:", { meetingSip, dialStatus });
   if (dialStatus && dialStatus !== "ok") {
     // Non-fatal: the agent can still join; the kiosk may need to join manually.
@@ -62,24 +63,57 @@ async function start() {
   }
 
   // 2) Join the SAME meeting as a guest.
-  webex = window.Webex.init({ credentials: { access_token: agentGuestToken } });
-  if (webex.config && webex.config.logger) webex.config.logger.level = "debug";
+  //
+  // The Service App guest token (POST /v1/guests/token) is meetings-capable.
+  // Two things are essential for the guest join to work:
+  //   a) WAIT for the SDK `ready` event before calling meetings.register().
+  //      Calling register() early is what caused the old
+  //      "Cannot read properties of undefined (reading 'internal')" crash.
+  //   b) The site assigns a meeting password even for allowJoin meetings, so
+  //      verify it (meeting.verifyPassword) before join() to avoid the
+  //      "Password is required" rejection.
+  try {
+    webex = window.Webex.init({ credentials: { access_token: agentGuestToken } });
+    if (webex.config && webex.config.logger) webex.config.logger.level = "debug";
 
-  webex.meetings
-    .register()
-    .then(() => {
-      console.log("Webex meetings registered");
-      return webex.meetings.create(meetingSip);
-    })
-    .then(async (meeting) => {
-      console.log("Meeting created for", meetingSip);
-      await bindMeetingEvents(meeting);
-      bindButtonEvents(meeting);
-      await joinMeeting(meeting);
-    })
-    .catch((err) => {
-      fail("Could not join the meeting.", err);
+    await waitForReady(webex);
+    await webex.meetings.register();
+    console.log("Webex meetings registered");
+
+    const meeting = await webex.meetings.create(meetingSip);
+    console.log("Meeting created for", meetingSip);
+
+    if (meetingPassword) {
+      try {
+        const vp = await meeting.verifyPassword(meetingPassword);
+        console.log("verifyPassword:", vp);
+      } catch (e) {
+        console.warn("verifyPassword failed (continuing):", e);
+      }
+    }
+
+    await bindMeetingEvents(meeting);
+    bindButtonEvents(meeting);
+    await joinMeeting(meeting);
+  } catch (err) {
+    fail("Could not join the meeting.", err);
+  }
+}
+
+// Resolves once the Webex SDK has finished initializing. Registering meetings
+// before this fires throws deep inside the SDK ("reading 'internal'").
+function waitForReady(webexInstance) {
+  return new Promise((resolve, reject) => {
+    if (webexInstance.ready) return resolve();
+    const timeout = setTimeout(
+      () => reject(new Error("Webex SDK ready timeout")),
+      20000
+    );
+    webexInstance.once("ready", () => {
+      clearTimeout(timeout);
+      resolve();
     });
+  });
 }
 
 function bindButtonEvents(meeting) {
