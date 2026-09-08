@@ -199,9 +199,23 @@ function bindButtonEvents(meeting) {
   document.getElementById("hangup").addEventListener("click", async () => {
     console.log("hangup clicked");
     try {
-      await meeting.leave();
+      // The agent joined as the meeting HOST, so end the meeting for EVERYONE.
+      // This also disconnects the auto-dialed Desk device. Fall back to a plain
+      // leave if this SDK build doesn't expose endMeetingForAll.
+      if (typeof meeting.endMeetingForAll === "function") {
+        await meeting.endMeetingForAll();
+      } else {
+        await meeting.leave();
+      }
     } catch (e) {
-      console.error("leave error", e);
+      console.error("end/leave error", e);
+      try {
+        await meeting.leave();
+      } catch (e2) {}
+    } finally {
+      // Guarantee the agent sees the "Call ended" page even if meeting events
+      // are slow to fire.
+      cleanupAndRedirect();
     }
   });
 
